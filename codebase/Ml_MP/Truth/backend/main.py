@@ -34,6 +34,26 @@ except Exception as _e:
     print(f"[ENV] python-dotenv unavailable; relying on shell env: {_e}")
 
 GOOGLE_FACTCHECK_API_KEY = os.environ.get("GOOGLE_FACTCHECK_API_KEY", "").strip() or None
+
+# Gemini API for the LLM Plausibility verifier. We deliberately use
+# gemini-2.5-flash with thinking disabled — this is a label-extraction task
+# (EXTRAORDINARY / PLAUSIBLE / UNCERTAIN), not a reasoning task, and Flash's
+# default thinking budget would burn output tokens before the label appears.
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip() or None
+LLM_PLAUSIBILITY_MODEL = os.environ.get("LLM_PLAUSIBILITY_MODEL", "gemini-2.5-flash").strip()
+_gemini_client = None
+
+def _get_gemini():
+    """Lazy-init the Gemini SDK client. Returns None if no key is configured."""
+    global _gemini_client
+    if _gemini_client is None and GEMINI_API_KEY:
+        try:
+            from google import genai
+            _gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+        except Exception as e:
+            print(f"[LLM] Gemini SDK unavailable: {e}")
+            _gemini_client = False  # sentinel — distinguishes "not yet tried" from "failed"
+    return _gemini_client or None
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
@@ -1032,6 +1052,128 @@ def verify_google_factcheck(text: str) -> FactualCheck:
                             result="Google Fact Check lookup failed.", status="unknown")
 
 
+# ───────────────────────────────────────────────────────────────────────────
+# 8th verifier — LLM Plausibility (Gemini 2.5 Flash)
+# ───────────────────────────────────────────────────────────────────────────
+# The other 7 verifiers depend on the claim having a fact-checkable surface:
+# a date to validate, a person/place on Wikipedia, a Snopes article, a Google
+# Fact Check rating. Out-of-domain "scientific breakthrough" hype (miracle
+# batteries, instant cures, perpetual motion) routinely returns 7×unknown,
+# leaving the stylometric ML model unconstrained.
+#
+# Gemini fills that gap with world knowledge. Strict label set (EXTRAORDINARY
+# / PLAUSIBLE / UNCERTAIN), thinking disabled (this is a label task — we
+# don't want Flash to spend output tokens on chain-of-thought before the
+# verdict), temperature 0 for determinism. Cached via cache_get/cache_set
+# so identical text doesn't re-bill.
+_LLM_PLAUSIBILITY_SYSTEM_PROMPT = """You are a scientific plausibility checker for a fake-news detection system.
+
+Reply with EXACTLY two lines, in this exact format. No preamble, no markdown, no extra commentary:
+
+verdict: <LABEL>
+reason: <one sentence, 25 words or fewer>
+
+<LABEL> MUST be EXACTLY ONE of these three strings — never invent new labels:
+
+- EXTRAORDINARY — claim violates established science, asserts breakthroughs orders-of-magnitude beyond known precedent without peer-reviewed evidence, or matches the profile of viral fake-tech news (miracle batteries, instant cures, perpetual motion, room-temperature superconductors at trivial cost, "completely replace X within a year"-style commercial timelines that ignore manufacturing reality).
+- PLAUSIBLE — claim is consistent with current science, well-attested incremental progress, or routine factual / political / business reporting with no extraordinary technical assertions.
+- UNCERTAIN — insufficient information, mixed signals, or topic outside well-established scientific consensus.
+
+If you cannot judge confidently, return UNCERTAIN. Never guess between EXTRAORDINARY and PLAUSIBLE."""
+
+
+def _parse_llm_verdict(raw: str) -> tuple[str, str]:
+    """Pull (verdict, reason) from Gemini's two-line response. Falls back gracefully."""
+    if not raw:
+        return ("UNCERTAIN", "")
+    verdict = "UNCERTAIN"
+    reason = ""
+    for line in raw.strip().splitlines():
+        line = line.strip()
+        low = line.lower()
+        if low.startswith("verdict:"):
+            tok = line.split(":", 1)[1].strip().upper()
+            # Be forgiving — strip punctuation/quotes the model may add.
+            tok = re.sub(r"[^A-Z]", "", tok)
+            if tok in {"EXTRAORDINARY", "PLAUSIBLE", "UNCERTAIN"}:
+                verdict = tok
+        elif low.startswith("reason:"):
+            reason = line.split(":", 1)[1].strip()
+    return (verdict, reason)
+
+
+def verify_llm_plausibility(text: str) -> FactualCheck:
+    """Ask Gemini whether the claim is scientifically plausible.
+
+    Maps:
+      EXTRAORDINARY → status="conflict"  (Rule 1 fires when factcheck OR LLM flags)
+      PLAUSIBLE     → status="verified"
+      UNCERTAIN     → status="unknown"
+    Always returns a FactualCheck — never raises.
+    """
+    if not isinstance(text, str) or len(text.strip()) < 30:
+        return FactualCheck(check_type="LLM Plausibility",
+                            result="Input too short for plausibility check.",
+                            status="unknown")
+
+    client = _get_gemini()
+    if client is None:
+        return FactualCheck(check_type="LLM Plausibility",
+                            result="LLM plausibility check unavailable (no GEMINI_API_KEY).",
+                            status="unknown")
+
+    # Cache hit → free, fast.
+    import hashlib
+    cache_key = hashlib.md5(text.strip().encode()).hexdigest()
+    cached = cache_get("llm_plausibility", cache_key)
+    if cached is not None:
+        return FactualCheck(**cached)
+
+    try:
+        from google.genai import types as _gtypes
+        resp = client.models.generate_content(
+            model=LLM_PLAUSIBILITY_MODEL,
+            contents=text[:4000],  # paragraph-scale; cap to keep latency tight
+            config=_gtypes.GenerateContentConfig(
+                system_instruction=_LLM_PLAUSIBILITY_SYSTEM_PROMPT,
+                temperature=0.0,
+                max_output_tokens=200,
+                # Disable thinking — this is a label-extraction task, not reasoning.
+                # Default thinking budget would eat the output budget before the verdict prints.
+                thinking_config=_gtypes.ThinkingConfig(thinking_budget=0),
+            ),
+        )
+        raw = (resp.text or "").strip()
+    except Exception as e:
+        print(f"[LLM] Gemini call failed: {e}")
+        return FactualCheck(check_type="LLM Plausibility",
+                            result="LLM plausibility check failed (API error).",
+                            status="unknown")
+
+    verdict, reason = _parse_llm_verdict(raw)
+    if verdict == "EXTRAORDINARY":
+        check = FactualCheck(
+            check_type="LLM Plausibility",
+            result=f"Conflict: Claim flagged as scientifically extraordinary. {reason}".strip(),
+            status="conflict",
+        )
+    elif verdict == "PLAUSIBLE":
+        check = FactualCheck(
+            check_type="LLM Plausibility",
+            result=f"Verified: Claim is plausible. {reason}".strip(),
+            status="verified",
+        )
+    else:
+        check = FactualCheck(
+            check_type="LLM Plausibility",
+            result=f"Uncertain: {reason}" if reason else "Uncertain: model returned no clear verdict.",
+            status="unknown",
+        )
+
+    cache_set("llm_plausibility", cache_key, check.dict())
+    return check
+
+
 _URL_REGEX = re.compile(r'https?://[^\s)>\]"]+', re.IGNORECASE)
 
 def extract_source_credibility(text: str) -> Optional[dict]:
@@ -1312,6 +1454,15 @@ async def analyze_article(
     if google_fc_result.status == "conflict":
         conflict_detected = True
 
+    # 8th verifier — LLM Plausibility (Gemini 2.5 Flash). World-knowledge
+    # check that catches OOD claims the other 7 verifiers can't, e.g. miracle
+    # batteries / instant cures / perpetual motion. EXTRAORDINARY → conflict
+    # → Rule 1 fires alongside the other fact-checkers.
+    llm_result = verify_llm_plausibility(clean_rag_text)
+    factual_analysis.append(llm_result)
+    if llm_result.status == "conflict":
+        conflict_detected = True
+
     # -- RAG EVIDENCE INTEGRATION (7-SOURCE CONSENSUS) --
     conflict_checks = [c for c in factual_analysis if c.status == "conflict"]
     verified_checks = [c for c in factual_analysis if c.status == "verified"]
@@ -1319,11 +1470,16 @@ async def analyze_article(
     num_verified = len(verified_checks)
 
     # Fact-checker verdicts carry extra weight. We treat the in-house
-    # search-based fact-checker (`factcheck_result`) and Google Fact Check Tools
-    # (`google_fc_result`) as a coalition — either flagging FALSE triggers
-    # Rule 1; either confirming TRUE triggers Rule 5.
-    fc_conflict = factcheck_result.status == "conflict" or google_fc_result.status == "conflict"
-    fc_verified = factcheck_result.status == "verified" or google_fc_result.status == "verified"
+    # search-based fact-checker (`factcheck_result`), Google Fact Check Tools
+    # (`google_fc_result`), and the LLM plausibility check (`llm_result`) as
+    # a coalition — any of them flagging FALSE / EXTRAORDINARY triggers Rule 1;
+    # any confirming TRUE / PLAUSIBLE triggers Rule 5.
+    fc_conflict = (factcheck_result.status == "conflict"
+                   or google_fc_result.status == "conflict"
+                   or llm_result.status == "conflict")
+    fc_verified = (factcheck_result.status == "verified"
+                   or google_fc_result.status == "verified"
+                   or llm_result.status == "verified")
     triggered_rule = None  # populated by whichever override rule fires; used by ConflictReport
 
     # Rule 1: Fact-checker says FALSE → strong override
@@ -1375,6 +1531,14 @@ async def analyze_article(
             confidence = max(confidence, 0.85)
             triggered_rule = f"Rule 4: {num_verified} sources support Real prediction."
             print(f"RAG CONFIRM: {num_verified} verifications support Real prediction.")
+    # Rule 7: No external evidence at all (zero conflicts AND zero verifications).
+    # The model alone is making the call — cap confidence so we never claim
+    # 100% on an input no verifier could corroborate.
+    elif num_conflicts == 0 and num_verified == 0 and not fc_conflict and not fc_verified:
+        if prediction in ("Real News", "Fake News") and confidence > 0.65:
+            confidence = 0.65
+            triggered_rule = "Rule 7: No external evidence; ML verdict cannot be confirmed."
+            print(f"RAG WARNING: No verifier found supporting evidence. Confidence capped at {confidence}.")
     # Rule 5: Fact-checker confirmed TRUE → boost
     if fc_verified and prediction == "Real News":
         confidence = max(confidence, 0.93)

@@ -8,7 +8,7 @@
 
 TruthLens is a fake-news detection system that combines a hybrid feature
 engineering pipeline (TF-IDF + sentence embeddings + 17 stylometric features),
-a stacking ensemble (SVM + LR + RF + LR meta-learner), and a 7-source
+a stacking ensemble (SVM + LR + RF + LR meta-learner), and a 8-source
 retrieval-augmented (RAG) verification layer — and then **audits its own
 behaviour** in three ways no published peer system does:
 
@@ -64,7 +64,7 @@ ml-mini-project/
 │       │
 │       └── Truth/                         # Web app
 │           ├── backend/                   # FastAPI server
-│           │   └── main.py                # ML inference + 7 RAG verifiers + ConflictReport
+│           │   └── main.py                # ML inference + 8 RAG verifiers + ConflictReport
 │           └── frontend/                  # React + Vite UI
 │               └── src/
 │                   ├── App.jsx, Analyzer.jsx
@@ -90,7 +90,7 @@ ml-mini-project/
 | Claim-type routing (article / claim / opinion / question / temporal) | Full Fact AI | Surfaced as a chip near the verdict |
 | Stacking + LIME + SHAP explanations | AEC (ESWA 2025) | Word-level + global feature importance |
 | Causal-inspired entity debiasing | ENDEF (SIGIR ’22) | Aggressive masking + SHAP-driven feature reweighting |
-| Live RAG retrieval + rationale | VeraCT-Scan, STEEL | 7 verifiers run per request, override rules transparent |
+| Live RAG retrieval + rationale | VeraCT-Scan, STEEL | 8 verifiers run per request, override rules transparent |
 | OCR / PDF / image input | (rare; not in the closest 7) | EasyOCR + PyPDF2 + python-docx |
 | Cross-dataset evaluation | dEFEND (partial) | ISOT↔LIAR reported honestly (~55% — calls for the abstention gate) |
 
@@ -119,7 +119,7 @@ config flag:
    numbers on a stacking ensemble.*
 
 3. **Structured ML-vs-RAG Conflict Explainer (A4).**
-   When the stylometric model and the 7-source RAG layer disagree, the API
+   When the stylometric model and the 8-source RAG layer disagree, the API
    returns a structured `ConflictReport` field (ml_verdict, ml_confidence,
    rag_verdict, rag_confidence, disagreement, winning_signal, triggered_rule,
    flagging_verifiers, top_lime_tokens, vocab_coverage, bias_gate_active).
@@ -137,7 +137,7 @@ config flag:
 | TF-IDF + SVD lexical pipeline | ✅ 150d | ❌ | ❌ | partial | ❌ | ❌ | ❌ | ✅ | ❌ |
 | Sentence-transformer embeddings | ✅ MiniLM 384d | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Stacking ensemble | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ |
-| Live RAG at inference | ✅ 7 verifiers | ❌ (curated DB) | partial | ❌ | ❌ | ❌ | ❌ | ✅ |
+| Live RAG at inference | ✅ 8 verifiers | ❌ (curated DB) | partial | ❌ | ❌ | ❌ | ❌ | ✅ |
 | Multi-source consensus + override rules | ✅ 6 documented rules | partial | partial | ❌ | partial | ❌ | ❌ | partial |
 | LIME + SHAP explainability | ✅ both | ❌ | ❌ | comments-based | ❌ | ❌ | ✅ | LLM-rationale |
 | Bias auditing as a diagnostic | ✅ source-name probe (91.45%) | ❌ | ❌ | ❌ | ❌ | ✅ as mitigation | ❌ | ❌ |
@@ -179,12 +179,15 @@ Raw text / PDF / Image
 [ Vocab-Coverage Gate ]   ──→  if coverage < 30% → "Uncertain"
        │
        ▼
-[ 7-Source RAG Layer ]
+[ 8-Source RAG Layer ]
        ├── Wikipedia       ├── Web (DuckDuckGo)
        ├── News consensus  ├── Snopes/PolitiFact/FullFact
        ├── Google Fact Check Tools
        ├── Calendar/Temporal
-       └── Geographic (Nominatim)
+       ├── Geographic (Nominatim)
+       └── LLM Plausibility (Gemini 2.5 Flash) — world-knowledge check
+            for out-of-domain claims the other 7 can't fact-check
+            (miracle batteries, instant cures, perpetual motion, …)
        │
        ▼
 [ Override Rules (1–6) ] ──→ ConflictReport
@@ -287,6 +290,44 @@ npm run dev                             # http://localhost:5173
 > `sentence-transformers` (MiniLM-L6-v2) instead, with no functionality loss.
 > If you have an older `venv_macos/` that still references gensim, just
 > `pip install sentence-transformers` and you’re done.
+
+---
+
+## Deploy
+
+The frontend deploys to **Netlify** as a static SPA; the backend runs as a
+**Docker container** anywhere that accepts a Dockerfile (Hugging Face Spaces,
+Render, Railway, Fly).
+
+**Frontend → Netlify**
+
+1. Push the repo to GitHub (already at `va-ada/Truth-Lens`).
+2. In the Netlify dashboard → "Import from Git" → pick the repo.
+3. `netlify.toml` at the repo root pre-configures the build (`base =
+   codebase/Ml_MP/Truth/frontend`, `command = npm ci && npm run build`,
+   `publish = dist`).
+4. Set one site env var: `VITE_API_URL=https://<your-backend-host>` (Netlify
+   dashboard → Site settings → Environment variables). Without it the
+   frontend points at `localhost:8000`.
+
+**Backend → Docker**
+
+```bash
+# from the repo root
+docker build -f codebase/Ml_MP/Truth/backend/Dockerfile -t truthlens-api .
+docker run -p 7860:7860 --env-file .env truthlens-api
+```
+
+The image bakes in the trained ensemble + feature engine (~140 MB) and the
+spaCy / MiniLM caches. Total ~1.5 GB. Recommended hosts:
+
+- **Hugging Face Spaces — Docker SDK** (free, 16 GB RAM, public ML demos)
+- **Render Web Service** ($7/mo, persistent disk)
+- **Railway / Fly.io** (pay-per-use)
+
+The container reads `$PORT` at startup so all of those work unchanged. Set
+`GEMINI_API_KEY` in the host's secret store for the LLM Plausibility verifier
+(falls back to `unknown` + Rule 7 cap when missing).
 
 ---
 

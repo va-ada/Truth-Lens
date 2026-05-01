@@ -68,7 +68,11 @@ export default function Analyzer() {
       if (inputType === 'text') formData.append('text', text);
       else if (inputType === 'file' && file) formData.append('file', file);
 
-      const response = await fetch('http://localhost:8000/api/analyze', {
+      // Backend URL is configurable so the same build can target localhost in
+      // dev and a deployed backend (e.g. Hugging Face Space, Render) in prod.
+      // Set VITE_API_URL in Netlify env vars; defaults to localhost:8000.
+      const apiBase = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/$/, '');
+      const response = await fetch(`${apiBase}/api/analyze`, {
         method: 'POST',
         body: formData,
       });
@@ -584,6 +588,12 @@ export default function Analyzer() {
                           status={getFactualStatus('Google Fact Check')}
                           icon={ShieldCheck}
                           url={result.factual_analysis.find(c => c.check_type === 'Google Fact Check')?.url}
+                      />
+                      <FactGauge
+                          label="AI PLAUSIBILITY"
+                          status={getFactualStatus('LLM Plausibility')}
+                          icon={Sparkles}
+                          url={result.factual_analysis.find(c => c.check_type === 'LLM Plausibility')?.url}
                       />
                     </div>
                   </div>

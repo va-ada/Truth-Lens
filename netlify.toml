@@ -1,0 +1,35 @@
+# Netlify deploys ONLY the frontend (React + Vite). The backend is an
+# always-on FastAPI service deployed separately via Docker (see
+# codebase/Ml_MP/Truth/backend/Dockerfile). Netlify points at it via the
+# VITE_API_URL env var configured in the dashboard.
+
+[build]
+  base    = "codebase/Ml_MP/Truth/frontend"
+  command = "npm ci && npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+  # VITE_API_URL is set per-site in the Netlify dashboard so we can rotate
+  # the backend host without a code change. Falls back to localhost:8000
+  # if missing — useful when previewing the build locally.
+
+# SPA fallback. The app uses hash routing, so deep links like /#/app and
+# /#/paper actually land on /index.html — but Netlify still needs this for
+# any non-hash subpath the user might reach.
+[[redirects]]
+  from   = "/*"
+  to     = "/index.html"
+  status = 200
+
+# Long-cache hashed asset bundles produced by Vite. The HTML itself stays
+# uncached so a redeploy is picked up immediately.
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/*.html"
+  [headers.values]
+    Cache-Control = "no-cache, no-store, must-revalidate"

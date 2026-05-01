@@ -1,0 +1,46 @@
+# Reduce build context — everything the Dockerfile doesn't COPY is excluded.
+
+# Local virtualenvs (huge, host-specific)
+codebase/Ml_MP/venv_macos/
+codebase/Ml_MP/Truth/backend/venv/
+codebase/Ml_MP/.venv/
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+
+# Datasets — NOT needed at inference time, only at training.
+datasets/
+codebase/Ml_MP/TruthLens/data/
+
+# Legacy / archive copies
+codebase/Ml_MP/TruthLens/models/_legacy/
+codebase/Ml_MP/Ml_MP_old/
+
+# Frontend (Netlify builds this separately)
+codebase/Ml_MP/Truth/frontend/
+
+# Local artifacts
+**/.DS_Store
+**/Thumbs.db
+.git/
+.github/
+.claude/
+.env
+.env.local
+
+# Documentation / research / presentations (not needed in the image)
+README.md
+CITATION.cff
+research/
+report*/
+presentations/
+imp*/
+*.pdf
+*.pptx
+*.mp4
+workflow_diagram.png
+workflow_diagram.py
+
+# IDE / editor
+.idea/
+.vscode/
