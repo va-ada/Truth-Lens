@@ -1,0 +1,37 @@
+# Core ML
+scikit-learn>=1.3.0
+pandas>=2.0.0
+numpy>=1.24.0
+scipy>=1.11.0
+joblib>=1.3.0
+
+# NLP & Text Processing
+spacy>=3.6.0
+nltk>=3.8.0
+sentence-transformers>=2.5.0   # replaces gensim/GloVe (incompatible with Python 3.14)
+textstat>=0.7.3
+vaderSentiment>=3.3.2
+
+# Explainability
+lime>=0.2.0
+shap>=0.42.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Data Download
+kagglehub>=0.2.0
+datasets>=2.14.0
+requests>=2.31.0
+
+# Progress
+tqdm>=4.65.0
+
+# Fact Verification
+ddgs>=9.0.0
+wikipedia-api>=0.7.0
+dateparser>=1.2.0
+
+# Demo UI
+gradio>=4.0.0

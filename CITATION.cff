@@ -1,0 +1,41 @@
+cff-version: 1.2.0
+title: "TruthLens — A Self-Auditing Fake News Detection System"
+message: "If you use TruthLens in academic work, please cite the project."
+type: software
+version: 1.0.0
+date-released: 2026-04-30
+authors:
+  - family-names: Patil
+    given-names: Riddhi
+    affiliation: "St. Francis Institute of Technology, Mumbai (C403 ML Mini Project)"
+  - family-names: Jha
+    given-names: Prashant
+    affiliation: "St. Francis Institute of Technology, Mumbai (C403 ML Mini Project)"
+  - family-names: Soni
+    given-names: Aditya
+    affiliation: "St. Francis Institute of Technology, Mumbai (C403 ML Mini Project)"
+    email: sanjay.soni@nazara.com
+  - family-names: Pereira
+    given-names: Riwan
+    affiliation: "St. Francis Institute of Technology, Mumbai (C403 ML Mini Project)"
+identifiers:
+  - type: other
+    value: "SFIT-C403-TruthLens-2026"
+    description: "Course project identifier"
+keywords:
+  - fake-news-detection
+  - debiasing
+  - retrieval-augmented-generation
+  - selective-prediction
+  - explainable-ai
+  - stacking-ensemble
+abstract: >-
+  TruthLens combines TF-IDF + sentence-transformer + 17 stylometric features
+  fed into a stacking ensemble (SVM + LR + RF + LR meta-learner), with a
+  7-source RAG verification layer. It contributes three system-level integration
+  novelties verified unpublished as of 2026-04-30: (1) a vocabulary-coverage
+  abstention gate that ties selective prediction to TF-IDF dictionary overlap,
+  (2) a bias-probe-driven debiasing loop with measurable before/after audit
+  numbers, and (3) a structured ML-vs-RAG conflict explainer surfaced both in
+  the API and the React UI.
+license: MIT

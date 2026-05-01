@@ -1,0 +1,17 @@
+fastapi
+uvicorn
+pydantic
+python-dotenv
+sentence-transformers
+scikit-learn
+spacy
+lime
+shap
+python-multipart
+duckduckgo-search
+wikipedia
+easyocr
+Pillow
+PyPDF2
+python-docx
+torch
